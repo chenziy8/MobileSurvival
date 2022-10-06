@@ -1,0 +1,211 @@
+using UnityEngine;
+using UnityEngine.InputSystem;
+public class PlayerController : MonoBehaviour
+{
+    private PlayerInputSystem playerInputSystem;
+    private PlayerInputActions playerInputActions;
+    private CharacterController characterController;
+    private Animator characterAnimator;
+    private int isWalkingHash;
+    private int isRunningHash;
+    private int isReadyHash;
+    private int triggerMeleeAttackHash;
+    private const float Gravity = -9.8f;
+    private float groundedGravity = -0.2f;
+    private WeaponManager weaponManager;
+
+    [SerializeField]
+    float currentGravity;
+    [SerializeField]
+    Vector3 movementVector3;
+
+    public GameObject characterModel;
+    public float runThreshold = 0.5f;
+    public float speed;
+    public float speedReductionWhenReady = 0.8f;
+    public int runSpeedModifier = 1;
+    public float rotationFactorPerFrame = 1f;
+
+    // Start is called before the first frame update
+    void Start()
+    {
+        playerInputSystem = GetComponent<PlayerInputSystem>();
+        characterAnimator = characterModel.GetComponent<Animator>();
+        SetAnimatorParameters();
+        characterController = GetComponent<CharacterController>();
+        GetAttackInput();
+        weaponManager = characterModel.GetComponent<WeaponManager>();
+        weaponManager.ResetWeapon();
+    }
+
+    private void SetAnimatorParameters()
+    {/*
+      * get all the animation parameters
+      */
+        isWalkingHash = Animator.StringToHash("isWalking");
+        isRunningHash = Animator.StringToHash("isRunning");
+        isReadyHash = Animator.StringToHash("isReady");
+        triggerMeleeAttackHash = Animator.StringToHash("triggerMeleeAttack");
+    }
+
+    private void GetAttackInput()
+    {/*
+      * Player input Right shoulder triggers attacks 
+      */
+
+        playerInputActions = playerInputSystem.GetPlayerInputActions;
+        playerInputActions.Player.Attack.performed += HandleAttackAnimation;
+    }
+
+    // Update is called once per frame
+    void Update()
+    {
+        HandleRotationControl();
+        UpdateMovementVector();
+        HandleMovementSpeed();
+        HandleGravity();
+        HandleAnimation();
+
+    }
+
+    private void HandleRotationControl()
+    {/*
+      * two sets of controlls:
+      * FIRST: left stick control only, left stick controls both movement direction and the rotation
+      * SECOND: right stick controls rotation while left stick controls movement direction.
+      */
+
+
+        if (playerInputSystem.isRotating)
+        {
+            HandleRotationWithControllerInput(playerInputSystem.rightStickRotationVector);
+        }
+        else if (!playerInputSystem.isRotating && playerInputSystem.isMoving)
+        {
+            HandleRotationWithControllerInput(playerInputSystem.leftStickMovementVector);
+        }
+    }
+    void HandleRotationWithControllerInput(Vector2 input)
+    {/*
+      * Controls the player character's facing direction
+      * parameter: vector2 input: from "PlayerInputSystem" Script
+      * convert controller input value to vector dirctions
+      */
+        Vector3 positionToLookAt;
+        positionToLookAt.x = input.x;
+        positionToLookAt.y = 0;
+        positionToLookAt.z = input.y;
+        Quaternion currentRotation = characterModel.transform.rotation;
+        Quaternion targetRotation = Quaternion.LookRotation(positionToLookAt);
+        characterModel.transform.rotation = Quaternion.Slerp(currentRotation, targetRotation, rotationFactorPerFrame * Time.deltaTime);
+
+    }
+    void UpdateMovementVector()
+    {
+        /*
+         * Controls the player character's movement direction using input value from "PlayerInputSystem" Script
+         */
+        movementVector3 = new Vector3(playerInputSystem.leftStickMovementVector.x, currentGravity, playerInputSystem.leftStickMovementVector.y);
+    }
+    void HandleMovementSpeed()
+    {
+        /*
+         * Player's speed changes according to whether the player is ready or not 
+         */
+        if (!playerInputSystem.isRotating)
+        {
+            calcualteMovementSpeed(1f);
+        }
+        else
+        {
+            calcualteMovementSpeed(speedReductionWhenReady);
+        }
+
+    }
+
+    private void calcualteMovementSpeed(float speedModifierWhenReady)
+    {/*
+      * called by HandleMovementSpeed() function.
+      * Parameter: speedModifierWhenReady is a float within a range from 0 to 1
+      * player should slow down when they are in a ready pose
+      */
+        if (playerInputSystem.isMoving && !playerInputSystem.isRunning)
+        {
+            characterController.Move(movementVector3.normalized * Time.deltaTime * speed * speedModifierWhenReady);
+        }
+        else if (playerInputSystem.isRunning)
+        {
+            characterController.Move(movementVector3.normalized * Time.deltaTime * speed * runSpeedModifier * speedModifierWhenReady);
+        }
+    }
+
+    void HandleAnimation()
+    {
+        /*
+         * Handle animations
+         * two different sets: 
+         *  - the first one is when the player is not READY to attack
+         *  - the second one is when the player is READY to attack
+         */
+        bool isWalkingPlaying = characterAnimator.GetBool(isWalkingHash);
+        bool isRunningPlaying = characterAnimator.GetBool(isRunningHash);
+
+        if (!playerInputSystem.isRotating)
+        {
+            characterAnimator.SetBool(isReadyHash, false);
+            if (playerInputSystem.isMoving && !isWalkingPlaying)
+            {
+                characterAnimator.SetBool(isWalkingHash, true);
+            }
+            else if (!playerInputSystem.isMoving && isWalkingPlaying)
+            {
+                characterAnimator.SetBool(isWalkingHash, false);
+            }
+
+            if ((playerInputSystem.isMoving && !isRunningPlaying) && playerInputSystem.isRunning)
+            {
+                characterAnimator.SetBool(isRunningHash, true);
+            }
+            else if ((!playerInputSystem.isMoving || !playerInputSystem.isRunning) && isRunningPlaying)
+            {
+                characterAnimator.SetBool(isRunningHash, false);
+            }
+        }
+        else
+        {
+            characterAnimator.SetBool(isReadyHash, true);
+            weaponManager.TakeOutWeapon();
+            float velocityZ = Vector3.Dot(movementVector3, characterModel.transform.forward);
+            float velocityX = Vector3.Dot(movementVector3, characterModel.transform.right);
+            characterAnimator.SetFloat("Direction", velocityZ, 0.1f, Time.deltaTime);
+            characterAnimator.SetFloat("Strafe", velocityX, 0.1f, Time.deltaTime);
+        }
+
+    }
+
+
+    void HandleGravity()
+    {
+        /*
+         * Because we are using characterController, which doesn't handle gravity by itself
+         */
+        if (characterController.isGrounded)
+        {
+            currentGravity = groundedGravity;
+        }
+        else
+        {
+            currentGravity += Gravity * Time.deltaTime;
+        }
+    }
+
+    public void HandleAttackAnimation(InputAction.CallbackContext context)
+    {
+        /*
+         *  Active weapon when the player enters READY mode  
+         */
+        weaponManager.TakeOutWeapon();
+        characterAnimator.SetTrigger(triggerMeleeAttackHash);
+    }
+
+}
